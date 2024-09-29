@@ -1,5 +1,9 @@
-import ../common, ../input, ../internal, chroma, pixie, opengl, os, perf,
-    staticglfw, times, typography/textboxes, unicode, vmath, strformat, bumpy
+import std/[os, times, unicode, strformat, importutils]
+import ../common, ../input, ../internal
+import chroma, pixie, opengl, perf, glfw, typography/textboxes, unicode, vmath, bumpy
+from glfw/wrapper import getVideoMode, setWindowSize, setWindowSizeLimits
+
+privateAccess(Monitor)
 
 when defined(glDebugMessageCallback):
   import strformat, strutils
@@ -27,7 +31,7 @@ const
   deltaTick: int64 = 1_000_000_000 div 240
 
 var
-  window: staticglfw.Window
+  window: glfw.Window
   loopMode*: MainLoopMode
   dpi*: float32
   drawFrame*: proc()
@@ -41,48 +45,47 @@ var
   frameCount*, tickCount*: int
   lastDraw, lastTick: int64
 
-var
+#[ var
   cursorDefault*: CursorHandle
   cursorPointer*: CursorHandle
   cursorGrab*: CursorHandle
-  cursorNSResize*: CursorHandle
+  cursorNSResize*: CursorHandle ]#
 
-proc setCursor*(cursor: CursorHandle) =
+#[ proc setCursor*(cursor: CursorHandle) =
   echo "set cursor"
-  window.setCursor(cursor)
+  window.setCursor(cursor) ]#
 
 proc updateWindowSize() =
+
   requestedFrame = true
 
-  var cwidth, cheight: cint
-  window.getWindowSize(addr cwidth, addr cheight)
+  var (cwidth, cheight) = window.size()
   windowSize.x = float32(cwidth)
   windowSize.y = float32(cheight)
 
-  window.getFramebufferSize(addr cwidth, addr cheight)
+  (cwidth, cheight) = window.framebufferSize()
   windowFrame.x = float32(cwidth)
   windowFrame.y = float32(cheight)
 
   minimized = windowSize == vec2(0, 0)
   pixelRatio = if windowSize.x > 0: windowFrame.x / windowSize.x else: 0
 
-  glViewport(0, 0, cwidth, cheight)
+  glViewport(0, 0, cwidth.cint, cheight.cint)
 
   let
     monitor = getPrimaryMonitor()
-    mode = monitor.getVideoMode()
-  monitor.getMonitorPhysicalSize(addr cwidth, addr cheight)
+    mode = monitor.handle.getVideoMode()
+  (cwidth, cheight) = monitor.physicalSizeMM()
+
   dpi = mode.width.float32 / (cwidth.float32 / 25.4)
 
   windowLogicalSize = windowSize / pixelScale * pixelRatio
 
-proc setWindowTitle*(title: string) =
-  if window != nil:
-    window.setWindowTitle(title)
+proc setWindowTitle*(title: string) {.inline.} =
+  window.title = title
 
 proc preInput() =
-  var x, y: float64
-  window.getCursorPos(addr x, addr y)
+  var (x, y) = window.cursorPos()
   mouse.pos = vec2(x, y)
   mouse.pos *= pixelRatio / mouse.pixelScale
   mouse.delta = mouse.pos - mouse.prevPos
@@ -122,7 +125,7 @@ proc drawAndSwap() =
   window.swapBuffers()
 
 proc updateLoop*(poll = true) =
-  if window.windowShouldClose() != 0:
+  if window.shouldClose():
     running = false
     return
 
@@ -191,23 +194,24 @@ proc glGetInteger*(what: GLenum): int =
   glGetIntegerv(what, val.addr)
   return val.int
 
-proc onResize(handle: staticglfw.Window, w, h: int32) {.cdecl.} =
+proc onResize(handle: Window, res: tuple[w, h: int32]) =
   updateWindowSize()
   updateLoop(poll = false)
 
-proc onFocus(window: staticglfw.Window, state: cint) {.cdecl.} =
-  focused = state == 1
+proc onFocus(window: Window, state: bool) =
+  focused = state
 
 proc onSetKey(
-  window: staticglfw.Window, key, scancode, action, modifiers: cint
-) {.cdecl.} =
+  window: Window, key: Key, scancode: int32, action: KeyAction, modifiers: set[ModifierKey]
+) =
   requestedFrame = true
-  let setKey = action != RELEASE
+  let key = key.int32
+  let setKey = action != kaUp
 
-  keyboard.altKey = setKey and ((modifiers and MOD_ALT) != 0)
+  keyboard.altKey = setKey and mkAlt in modifiers
   keyboard.ctrlKey = setKey and
-    ((modifiers and MOD_CONTROL) != 0 or (modifiers and MOD_SUPER) != 0)
-  keyboard.shiftKey = setKey and ((modifiers and MOD_SHIFT) != 0)
+    (mkCtrl in modifiers or mkSuper in modifiers)
+  keyboard.shiftKey = setKey and mkShift in modifiers
 
   # Do the text box commands.
   if keyboard.focusNode != nil and setKey:
@@ -247,13 +251,13 @@ proc onSetKey(
         textBox.delete(shift)
       of LETTER_C: # copy
         if ctrl:
-          base.window.setClipboardString(textBox.copy())
+          base.window.clipboardString = textBox.copy()
       of LETTER_V: # paste
         if ctrl:
-          textBox.paste($base.window.getClipboardString())
+          textBox.paste($base.window.clipboardString())
       of LETTER_X: # cut
         if ctrl:
-          base.window.setClipboardString(textBox.cut())
+          base.window.clipboardString = textBox.cut()
       of LETTER_A: # select all
         if ctrl:
           textBox.selectAll()
@@ -269,86 +273,85 @@ proc onSetKey(
       buttonRelease[key] = true
     buttonDown[key] = setKey
 
-proc onScroll(window: staticglfw.Window, xoffset, yoffset: float64) {.cdecl.} =
+proc onScroll(window: Window, offset: tuple[x, y: float64]) =
   requestedFrame = true
   if keyboard.focusNode != nil:
-    textBox.scrollBy(-yoffset * 50)
+    textBox.scrollBy(-offset.y * 50)
   else:
-    mouse.wheelDelta += yoffset
+    mouse.wheelDelta += offset.y
 
 proc onMouseButton(
-  window: staticglfw.Window, button, action, modifiers: cint
-) {.cdecl.} =
+  window: Window, button: MouseButton, pressed: bool, modifiers: set[ModifierKey]
+) =
   requestedFrame = true
-  let
-    setKey = action != 0
-    button = button + 1 # Fidget mouse buttons are +1 from staticglfw
-  if button < buttonDown.len:
+  let button = button.int32 + 1'i32
+  let setKey = pressed != false
+
+  if button < buttonDown.len.int32:
     if buttonDown[button] == false and setKey == true:
       buttonPress[button] = true
     buttonDown[button] = setKey
+
   if buttonDown[button] == false and setKey == false:
     buttonRelease[button] = true
-
-proc onMouseMove(window: staticglfw.Window, x, y: cdouble) {.cdecl.} =
+  
+proc onMouseMove(window: Window, pos: tuple[x, y: float64]) =
   requestedFrame = true
 
-proc onSetCharCallback(window: staticglfw.Window, character: cuint) {.cdecl.} =
+proc onSetCharCallback(window: Window, character: Rune) =
   requestedFrame = true
   if keyboard.focusNode != nil:
     keyboard.state = KeyState.Press
-    textBox.typeCharacter(Rune(character))
+    textBox.typeCharacter(character)
   else:
     keyboard.state = KeyState.Press
-    keyboard.keyString = Rune(character).toUTF8()
+    keyboard.keyString = character.toUTF8()
 
 proc start*(openglVersion: (int, int), msaa: MSAA, mainLoopMode: MainLoopMode) =
-  if init() == 0:
-    quit("Failed to intialize GLFW.")
+  glfw.initialize()
 
   running = true
   loopMode = mainLoopMode
 
-  if msaa != msaaDisabled:
+  #[ if msaa != msaaDisabled:
     windowHint(SAMPLES, msaa.cint)
 
   windowHint(OPENGL_FORWARD_COMPAT, GL_TRUE.cint)
   windowHint(OPENGL_PROFILE, OPENGL_CORE_PROFILE)
   windowHint(CONTEXT_VERSION_MAJOR, openglVersion[0].cint)
-  windowHint(CONTEXT_VERSION_MINOR, openglVersion[1].cint)
+  windowHint(CONTEXT_VERSION_MINOR, openglVersion[1].cint) ]#
 
   if fullscreen:
     let
       monitor = getPrimaryMonitor()
-      mode = getVideoMode(monitor)
-    window = createWindow(mode.width, mode.height, "", monitor, nil)
+      mode = getVideoMode(monitor.handle)
+
+    window = newWindow()
+    window.getHandle().setWindowSize(mode.width, mode.height)
   else:
     let
       monitor = getPrimaryMonitor()
-    var dpiScale, yScale: cfloat
-    monitor.getMonitorContentScale(addr dpiScale, addr yScale)
+    var (dpiScale, yScale) = monitor.contentScale()
     assert dpiScale == yScale
 
-    window = createWindow(
-      (windowSize.x / dpiScale * pixelScale).cint,
-      (windowSize.y / dpiScale * pixelScale).cint,
-      "",
-      nil,
-      nil
+    window = newWindow()
+    window.getHandle().setWindowSize(
+      (windowSize.x / dpiScale * pixelScale).int32,
+      (windowSize.y / dpiScale * pixelScale).int32
     )
 
   if window.isNil:
     quit(
-      "Failed to open window. GL version:" &
+      "Failed to open window. OpenGL version:" &
       &"{openglVersion[0]}.{$openglVersion[1]}"
     )
 
   window.makeContextCurrent()
 
-  cursorDefault = createStandardCursor(ARROW_CURSOR)
-  cursorPointer = createStandardCursor(HAND_CURSOR)
-  cursorGrab = createStandardCursor(HAND_CURSOR)
-  cursorNSResize = createStandardCursor(HRESIZE_CURSOR)
+  #cursorDefault = createStandardCursor(ARROW_CURSOR)
+  #cursorPointer = createStandardCursor(HAND_CURSOR)
+  #cursorGrab = createStandardCursor(HAND_CURSOR)
+  #cursorNSResize = createStandardCursor(HRESIZE_CURSOR)
 
   when not defined(emscripten):
     swapInterval(1)
@@ -382,13 +385,13 @@ proc start*(openglVersion: (int, int), msaa: MSAA, mainLoopMode: MainLoopMode) =
     echo "GL_SHADING_LANGUAGE_VERSION:",
       cast[cstring](glGetString(GL_SHADING_LANGUAGE_VERSION))
 
-  discard window.setFramebufferSizeCallback(onResize)
-  discard window.setWindowFocusCallback(onFocus)
-  discard window.setKeyCallback(onSetKey)
-  discard window.setScrollCallback(onScroll)
-  discard window.setMouseButtonCallback(onMouseButton)
-  discard window.setCursorPosCallback(onMouseMove)
-  discard window.setCharCallback(onSetCharCallback)
+  window.frameBufferSizeCb = onResize
+  window.windowFocusCb = onFocus
+  window.keyCb = onSetKey
+  window.scrollCb = onScroll
+  window.mouseButtonCb = onMouseButton
+  window.cursorPositionCb = onMouseMove
+  window.charCb = onSetCharCallback
 
   glEnable(GL_BLEND)
   #glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -402,21 +405,23 @@ proc start*(openglVersion: (int, int), msaa: MSAA, mainLoopMode: MainLoopMode) =
   lastDraw = getTicks()
   lastTick = lastDraw
 
-  onFocus(window, FOCUSED)
+  onFocus(window, true)
   focused = true
   updateWindowSize()
 
 proc captureMouse*() =
-  setInputMode(window, CURSOR, CURSOR_DISABLED)
+  window.cursorMode = cmDisabled
 
 proc releaseMouse*() =
-  setInputMode(window, CURSOR, CURSOR_NORMAL)
+  window.cursorMode = cmNormal
 
 proc hideMouse*() =
-  setInputMode(window, CURSOR, CURSOR_HIDDEN)
+  window.cursorMode = cmHidden
 
 proc setWindowBounds*(min, max: Vec2) =
-  window.setWindowSizeLimits(min.x.cint, min.y.cint, max.x.cint, max.y.cint)
+  window.getHandle().setWindowSizeLimits(
+    min.x.int32, min.y.int32, max.x.int32, max.y.int32
+  )
 
 proc takeScreenshot*(
   frame = rect(0, 0, windowFrame.x, windowFrame.y)
