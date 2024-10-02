@@ -1,16 +1,15 @@
-import algorithm, chroma, fidget/common, fidget/input, json, macros, strutils,
+import algorithm, chroma, dios/common, dios/input, json, macros, strutils,
     tables, vmath, bumpy
 
 export chroma, common, input, vmath
 
 when defined(js):
-  import fidget/htmlbackend
-  export htmlbackend
+  {.error: "Dios does not support the JavaScript backend!".}
 elif defined(nullbackend):
-  import fidget/nullbackend
+  import dios/nullbackend
   export nullbackend
 else:
-  import fidget/openglbackend
+  import dios/openglbackend
   export openglbackend
 
 proc preNode(kind: NodeKind, id: string) =

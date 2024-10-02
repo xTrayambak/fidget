@@ -3,9 +3,6 @@ import chroma, common, hashes, input, internal, opengl/base,
     typography/textboxes, unicode, vmath, opengl/formatflippy, bumpy,
     typography/svgfont, pixie
 
-when not defined(emscripten) and not defined(fidgetNoAsync):
-  import httpClient, asyncdispatch, asyncfutures, json
-
 export input
 
 type
@@ -289,11 +286,7 @@ proc draw*(node: Node) =
   if node.clipContent:
     ctx.popMask()
 
-proc openBrowser*(url: string) =
-  ## Opens a URL in a browser
-  discard
-
-proc setupFidget(
+proc setupDios(
   openglVersion: (int, int),
   msaa: MSAA,
   mainLoopMode: MainLoopMode,
@@ -367,17 +360,7 @@ proc setupFidget(
   if loadMain != nil:
     loadMain()
 
-proc asyncPoll() =
-  when not defined(emscripten) and not defined(fidgetNoAsync):
-    var haveCalls = false
-    for call in httpCalls.values:
-      if call.status == Loading:
-        haveCalls = true
-        break
-    if haveCalls:
-      poll()
-
-proc startFidget*(
+proc startDios*(
   draw: proc(),
   tick: proc() = nil,
   load: proc() = nil,
@@ -390,28 +373,19 @@ proc startFidget*(
   pixelate = false,
   pixelScale = 1.0
 ) =
-  ## Starts Fidget UI library
+  ## Starts Dios UI library
   common.fullscreen = fullscreen
   if not fullscreen:
     windowSize = vec2(w.float32, h.float32)
   drawMain = draw
   tickMain = tick
   loadMain = load
-  setupFidget(openglVersion, msaa, mainLoopMode, pixelate, pixelScale)
+  setupDios(openglVersion, msaa, mainLoopMode, pixelate, pixelScale)
   mouse.pixelScale = pixelScale
-  when defined(emscripten):
-    # Emscripten can't block so it will call this callback instead.
-    proc emscripten_set_main_loop(f: proc() {.cdecl.}, a: cint, b: bool) {.importc.}
-    proc mainLoop() {.cdecl.} =
+  while base.running:
+    updateLoop()
 
-      asyncPoll()
-      updateLoop()
-    emscripten_set_main_loop(main_loop, 0, true)
-  else:
-    while base.running:
-      updateLoop()
-      asyncPoll()
-    exit()
+  exit()
 
 proc getTitle*(): string =
   ## Gets window title
@@ -426,13 +400,6 @@ proc setTitle*(title: string) =
 
 proc setWindowBounds*(min, max: Vec2) =
   base.setWindowBounds(min, max)
-
-proc getUrl*(): string =
-  windowUrl
-
-proc setUrl*(url: string) =
-  windowUrl = url
-  refresh()
 
 proc loadFontAbsolute*(name: string, pathOrUrl: string) =
   ## Loads fonts anywhere in the system.
@@ -457,30 +424,3 @@ proc setItem*(key, value: string) =
 proc getItem*(key: string): string =
   ## Gets a value into local storage or file.
   readFile(&"{key}.data")
-
-when not defined(emscripten) and not defined(fidgetNoAsync):
-  proc httpGetCb(future: Future[string]) =
-    refresh()
-
-  proc httpGet*(url: string): HttpCall =
-    if url notin httpCalls:
-      result = HttpCall()
-      var client = newAsyncHttpClient()
-      echo "new call"
-      result.future = client.getContent(url)
-      result.future.addCallback(httpGetCb)
-      httpCalls[url] = result
-      result.status = Loading
-    else:
-      result = httpCalls[url]
-
-    if result.status == Loading and result.future.finished:
-      result.status = Ready
-      try:
-        result.data = result.future.read()
-        result.json = parseJson(result.data)
-      except HttpRequestError:
-        echo getCurrentExceptionMsg()
-        result.status = Error
-
-    return

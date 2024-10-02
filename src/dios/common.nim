@@ -1,9 +1,6 @@
 import chroma, input, sequtils, tables, vmath, json, bumpy
 
-when defined(js):
-  import dom2, html/ajax
-else:
-  import typography, typography/textboxes, tables, asyncfutures
+import typography, typography/textboxes, tables, asyncfutures
 
 const
   clearColor* = color(0, 0, 0, 0)
