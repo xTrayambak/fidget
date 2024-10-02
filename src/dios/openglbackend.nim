@@ -345,7 +345,7 @@ proc setupFidget(
     if mouse.prevCursorStyle != mouse.cursorStyle:
       mouse.prevCursorStyle = mouse.cursorStyle
       echo mouse.cursorStyle
-      case mouse.cursorStyle:
+      #[ case mouse.cursorStyle:
         of Default:
           setCursor(cursorDefault)
         of Pointer:
@@ -353,7 +353,7 @@ proc setupFidget(
         of Grab:
           setCursor(cursorGrab)
         of NSResize:
-          setCursor(cursorNSResize)
+          setCursor(cursorNSResize) ]#
 
     when defined(testOneFrame):
       ## This is used for test only
